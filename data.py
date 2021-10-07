@@ -35,7 +35,8 @@ class TextData(IterableDataset):
 
     def __next__(self):
         for index in range(self.start_index, self.end_index, self.seq_len):
-            yield self.text[index: index + self.seq_len]
+            sentence = self.text[index: index + self.seq_len]
+            yield sentence[:-1], sentence[1:]
 
 
 def create_binarized_text(vocab, text_f, outf):

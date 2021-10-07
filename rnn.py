@@ -12,6 +12,7 @@ class RnnLM(nn.Module):
         self.vocab_size = vocab_size
 
     def forward(self, x):
+        x = self.embedding(x)
         N, T, C = x.shape
         x = x.view(N * T, C)
         x = self.linear(x)
