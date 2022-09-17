@@ -1,0 +1,22 @@
+n_layer: 12
+n_head: 8
+n_embd: 512
+vocab_size: 50000
+block_size: 256
+embd_pdrop: 0.1
+resid_pdrop: 0.1
+attn_pdrop: 0.1
+
+
+epochs: 20
+max_updates: 200000
+seq_len: 256
+batch_size: 40
+num_workers: 4
+betas: [0.9, 0.95]
+
+lr: 0.0001
+wd: 0.01
+clip_norm: 1.
+dropout: 0.
+valid_batch_size: 64
