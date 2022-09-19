@@ -57,13 +57,13 @@ class RotaryAttention(nn.Module):
 
 
 class TransformerDecoderLayer(nn.Module):
-    def __init__(self, d_model):
+    def __init__(self, d_model, dropout):
         super().__init__()
         self.attn = RotaryAttention(d_model, num_heads=8, dropout=0.)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         self.ff = FeedForwardBlock(d_model)
-        self.dropout = nn.Dropout(p=0.)
+        self.dropout = nn.Dropout(p=dropout)
         
     def forward(self, x, attn_mask):
         y = self.norm1(x)
@@ -73,10 +73,10 @@ class TransformerDecoderLayer(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, d_model, num_layers, vocab_size):
+    def __init__(self, d_model, num_layers, vocab_size, dropout):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, d_model)
-        decodelayer = TransformerDecoderLayer(d_model)
+        decodelayer = TransformerDecoderLayer(d_model, dropout)
         self.layers = [decodelayer]
         for _ in range(num_layers-1):
             self.layers.append(copy.deepcopy(decodelayer))

@@ -16,7 +16,8 @@ from ignite.engine import Events, Engine
 from ignite.handlers import Checkpoint, global_step_from_engine
 
 from data import TextData
-from transformer import Transformer
+from transformer_scaled import Transformer
+from optim import Eve
 
 
 class BasicLRScheduler:
@@ -31,7 +32,7 @@ class BasicLRScheduler:
             new_value = (self.step_count / self.num_warmup) * self.base_lr
         else:
             offset = self.step_count - self.num_warmup
-            new_value = self.base_lr * m.exp(-offset/40000)
+            new_value = self.base_lr * m.exp(-offset/30000)
         self.step_count += 1
         return new_value
 
@@ -74,6 +75,7 @@ class CrossEntLoss(nn.CrossEntropyLoss):
 
 def parse_args():
     args = sys.argv[1:]
+    print(args)
     args_dct = {arg.split('=')[0]: arg.split('=')[1] for arg in args}
     for key, value in args_dct.items():
         if re.match('^[0-9]+$', value):
@@ -86,9 +88,10 @@ def main():
 
     logger.info('Starting script.')
     args_dct = parse_args()
-    params = load_hyperpyyaml(open('hparams/transformer.yaml'), overrides=args_dct)
+    params = load_hyperpyyaml(open('hparams/scaled.yaml'), overrides=args_dct)
     params['wd'] = float(params['wd'])
     params['lr'] = float(params['lr'])
+    os.makedirs(params['workd'], exist_ok=True)
     logger.info(f'Params are:\n{params}')
 
     wandb.init(project='nnlms', config=params, group='transformer')
@@ -97,8 +100,8 @@ def main():
     sp_model = spm.SentencePieceProcessor('wikitext-103/50k_sp.model')
     vocab_size = len(sp_model)
 
-    model = Transformer(512, 12, vocab_size, dropout=params['dropout'])
-    print(model)
+    model = Transformer(params['d_model'], 12, vocab_size, dropout=params['dropout'], nhead=params['nhead'])
+    logger.info(model)
     num_params = sum(param.numel() for param in model.parameters())
     logger.info(f'Number of parameters: {num_params}')
 
@@ -114,7 +117,7 @@ def main():
     device = 'cuda'
     model.to(device)
     criterion = CrossEntLoss(reduction='mean')
-    optimizer = model.configure_optimizers(params)
+    optimizer = Eve(model.parameters(), lr=params['lr'], weight_decay=params['wd'])
     scaler = torch.cuda.amp.GradScaler()
     lr_scheduler = BasicLRScheduler(params['lr'], params['warmup_updates'])
     grad_accum = params['grad_accum']
@@ -140,7 +143,7 @@ def main():
 
     trainer = Engine(update_step)
 
-    evaluator = create_supervised_evaluator(model, {"nll": Loss(criterion)}, device=device)
+    evaluator = create_supervised_evaluator(model, {"nll": Loss(criterion)}, device=device, amp_mode='amp')
 
     @trainer.on(Events.ITERATION_COMPLETED(every=2000))
     def run_validation(engine):
@@ -154,11 +157,11 @@ def main():
     def log_training(engine):
         lr = optimizer.param_groups[0]['lr']
         logger.info(f'Iteration {engine.state.iteration/grad_accum} - nll {engine.state.output:.3f} - lr {lr:.7f}')
-        wandb.log(step=engine.state.iteration, data={'train_nll': engine.state.output})
+        wandb.log(step=engine.state.iteration, data={'train_nll': engine.state.output, 'lr': lr})
 
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_epoch(engine):
-        logger.info(f'Finished epoch, current iteration {engine.state.iteration/grad_accum}')
+        logger.info(f'Finished epoch {engine.state.epoch}, current iteration {engine.state.iteration/grad_accum}')
 
     @trainer.on(Events.ITERATION_STARTED)
     def update_lr(engine):
@@ -180,11 +183,9 @@ def report_gradients(step, module, optimizer):
     found_grad = False
     for name, param in module.named_parameters():
         grad = param.grad
-        if grad is not None and param.ndim >= 2:
+        if grad is not None:
             found_grad = True
-            # std = torch.std(param)
             norm = rms(param)
-            # grad_std = torch.std(grad)
             grad_norm = rms(grad)
             exp_avg = optimizer.state[param]['exp_avg']
             grad_simil = F.cosine_similarity(grad.view(-1), exp_avg.view(-1), dim=0)
@@ -194,7 +195,7 @@ def report_gradients(step, module, optimizer):
                 }
             wandb.log(data=data, step=step)
     if not found_grad:
-        logger.info('Not found gradient.')
+        logger.warning('Not found gradient to report.')
 
 
 if __name__ == '__main__':

@@ -2,8 +2,11 @@ from typing import Tuple
 import math
 
 import torch
+import torch.nn as nn
 
 from einops import rearrange, repeat
+from scaling import ScaledLinear
+from flash_attn.flash_attention import FlashAttention
 
 
 def rotate_half(x):
@@ -27,6 +30,45 @@ def apply_rotary_pos_emb(x, cos, sin, seq_dimension: int = -2):
         cos = cos[:, None, :]
         sin = sin[:, None, :]
     return (x * cos) + (rotate_half(x) * sin)
+
+
+class RotaryAttention(nn.Module):
+    def __init__(self, d_model, num_heads, dropout=0.1) -> None:
+        super().__init__()
+        self.head_dim = d_model // num_heads
+        self.num_heads = num_heads
+        self.Wqkv = ScaledLinear(d_model, d_model*3)
+        self.out_proj = ScaledLinear(d_model, d_model)
+        self.rotary_emb = RotaryEmbedding(self.head_dim)
+        self.attention_dropout = dropout
+        self.inner_attn = FlashAttention()
+
+    def forward(self, x, attn_mask):
+        qkv = self.Wqkv(x)
+        query, key, value = rearrange(qkv, 'b s (three h d) -> b s three h d', three=3,
+                                          h=self.num_heads).unbind(dim=2)
+        query, key = self.rotary_emb(query, key, seq_dimension=-3)
+        qkv = torch.stack([query, key, value], dim=2)
+        if qkv.dtype == torch.float16:
+            context, attn_weights = self.inner_attn(qkv, causal=True)
+        else:
+            bs = query.size(0)
+            seqlen = query.size(1)
+            query = query.transpose(1, 2).reshape(bs*self.num_heads, seqlen, self.head_dim)
+            key = key.transpose(1, 2).reshape(bs*self.num_heads, seqlen, self.head_dim)
+            attn_weights = torch.bmm(query, key.transpose(1, 2)) / self.head_dim ** 0.5 # -> b*h s s
+            attn_weights = attn_weights.masked_fill(attn_mask, float("-inf"))
+            attn_weights = attn_weights.view(bs, self.num_heads, seqlen, seqlen)
+            attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+            # b h s s
+            attn_weights = attn_weights.view(bs*self.num_heads, seqlen, seqlen)
+            # b*h s s
+            attn_weights = nn.functional.dropout(attn_weights, self.attention_dropout, training=self.training)
+
+            value = value.transpose(1, 2).reshape(bs * self.num_heads, seqlen, self.head_dim)
+            context = torch.bmm(attn_weights, value)  # -> b*h s d
+            context = context.view(bs, self.num_heads, seqlen, self.head_dim).transpose(1, 2)
+        return self.out_proj(rearrange(context, 'b s h d -> b s (h d)'))
 
 
 class RotaryEmbedding(torch.nn.Module):

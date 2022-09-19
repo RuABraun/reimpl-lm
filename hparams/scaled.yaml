@@ -4,12 +4,15 @@ seq_len: 256
 batch_size: 44
 num_workers: 4
 
+d_model: 768
+nhead: 12
 lr: 0.001
-warmup_updates: 1
+warmup_updates: 1500
 wd: 0.01
+dropout: 0.1
+
 grad_accum: 1
 clip_norm: 1.
-dropout: 0.1
-valid_batch_size: 64
+valid_batch_size: 40
 
-workd: 'exp/normal'
+workd: 'exp/scaling-a'
