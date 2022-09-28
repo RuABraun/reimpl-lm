@@ -97,7 +97,7 @@ def main():
     sp_model = spm.SentencePieceProcessor('wikitext-103/50k_sp.model')
     vocab_size = len(sp_model)
 
-    model = Transformer(512, 12, vocab_size, dropout=params['dropout'])
+    model = Transformer(768, 12, vocab_size, dropout=params['dropout'])
     print(model)
     num_params = sum(param.numel() for param in model.parameters())
     logger.info(f'Number of parameters: {num_params}')
@@ -154,7 +154,7 @@ def main():
     def log_training(engine):
         lr = optimizer.param_groups[0]['lr']
         logger.info(f'Iteration {engine.state.iteration/grad_accum} - nll {engine.state.output:.3f} - lr {lr:.7f}')
-        wandb.log(step=engine.state.iteration, data={'train_nll': engine.state.output})
+        wandb.log(step=engine.state.iteration, data={'train_nll': engine.state.output, 'lr': lr})
 
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_epoch(engine):
@@ -166,7 +166,7 @@ def main():
         optimizer.param_groups[0]['lr'] = new_lr
 
     to_save = {'model': model, 'optimizer': optimizer, 'trainer': trainer, 'lr_scheduler': lr_scheduler}
-    checkpointer = Checkpoint(to_save, params['workd'], n_saved=2, global_step_transform=global_step_from_engine(trainer))
+    checkpointer = Checkpoint(to_save, params['workd'], n_saved=None, global_step_transform=global_step_from_engine(trainer))
     trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpointer)
 
     trainer.run(train_loader, max_epochs=params['epochs'])
@@ -180,7 +180,7 @@ def report_gradients(step, module, optimizer):
     found_grad = False
     for name, param in module.named_parameters():
         grad = param.grad
-        if grad is not None and param.ndim >= 2:
+        if grad is not None:
             found_grad = True
             # std = torch.std(param)
             norm = rms(param)

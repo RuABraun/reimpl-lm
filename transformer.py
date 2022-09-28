@@ -12,8 +12,8 @@ from rotary import RotaryEmbedding
 class FeedForwardBlock(nn.Module):
     def __init__(self, d_model):
         super().__init__()
-        self.fc1 = nn.Linear(d_model, 2048)
-        self.fc2 = nn.Linear(2048, d_model)
+        self.fc1 = nn.Linear(d_model, 3072)
+        self.fc2 = nn.Linear(3072, d_model)
         self.activation = nn.GELU()
 
     def forward(self, x):

@@ -70,7 +70,8 @@ class CrossEntLoss(nn.CrossEntropyLoss):
     def forward(self, input, target):
         input = input.view(-1, input.size(-1))
         target = target.view(-1)
-        return super().forward(input, target)
+        loss = super().forward(input, target)
+        return loss
 
 
 def parse_args():
@@ -129,7 +130,8 @@ def main():
         with torch.cuda.amp.autocast():
             pred = model(x)
             loss = criterion(pred, y)
-        scaler.scale(loss / grad_accum).backward()
+        loss_scale = y.numel()
+        scaler.scale(loss_scale * loss / grad_accum).backward()
         if should_step:
             scaler.unscale_(optimizer)
             if engine.state.iteration % 20 == 0 and engine.state.iteration > 1:
@@ -139,11 +141,21 @@ def main():
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
-        return loss
+        return loss.detach()
 
     trainer = Engine(update_step)
 
-    evaluator = create_supervised_evaluator(model, {"nll": Loss(criterion)}, device=device, amp_mode='amp')
+    def forward_pass(engine, batch):
+        model.eval()
+        with torch.no_grad():
+            with torch.cuda.amp.autocast():
+                x, y = batch[0].cuda(), batch[1].cuda()
+                y_pred = model(x)
+        return y_pred, y
+    
+    evaluator = Engine(forward_pass)
+    metric = Loss(criterion)
+    metric.attach(evaluator, "nll")
 
     @trainer.on(Events.ITERATION_COMPLETED(every=2000))
     def run_validation(engine):
@@ -165,11 +177,11 @@ def main():
 
     @trainer.on(Events.ITERATION_STARTED)
     def update_lr(engine):
-        new_lr = lr_scheduler.step()
+        new_lr = lr_scheduler.step() / (engine.state.batch[0].size(0))
         optimizer.param_groups[0]['lr'] = new_lr
 
     to_save = {'model': model, 'optimizer': optimizer, 'trainer': trainer, 'lr_scheduler': lr_scheduler}
-    checkpointer = Checkpoint(to_save, params['workd'], n_saved=2, global_step_transform=global_step_from_engine(trainer))
+    checkpointer = Checkpoint(to_save, params['workd'], n_saved=None, global_step_transform=global_step_from_engine(trainer))
     trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpointer)
 
     trainer.run(train_loader, max_epochs=params['epochs'])
